@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-import jwt, time, threading
-from prometheus_client import start_http_server, Gauge, Counter
+import jwt, time
+from prometheus_client import Gauge, Counter, make_wsgi_app
+from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
 app = Flask(__name__)
 SECRET = "supersecretkey"
@@ -25,15 +26,20 @@ auth_up = Gauge('auth_service_up', 'Is auth service running')
 register_counter = Counter('auth_register_total', 'Total successful registrations')
 login_counter = Counter('auth_login_total', 'Total successful logins')
 
-def start_metrics():
-    """Отдельный поток для метрик"""
-    start_http_server(8666, addr="0.0.0.0")  # слушаем на всех интерфейсах
+# === Монтируем метрики в Flask под /metrics ===
+metrics_app = make_wsgi_app()
+app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {
+    '/metrics': metrics_app
+})
+
+# === Поток обновления метрик ===
+def update_metrics():
     while True:
         auth_up.set(1)
         time.sleep(5)
 
-# === Запускаем поток метрик как daemon всегда ===
-threading.Thread(target=start_metrics, daemon=True).start()
+import threading
+threading.Thread(target=update_metrics, daemon=True).start()
 
 # ================== API ==================
 @app.route("/api/register", methods=["POST"])
@@ -71,5 +77,4 @@ def home():
     return jsonify({"message": "Auth service is running"})
 
 if __name__ == "__main__":
-    # debug=True больше не влияет на поток метрик
     app.run(host="0.0.0.0", port=5001, debug=True)

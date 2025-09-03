@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-import threading, time, os
-import requests
-from prometheus_client import start_http_server, Gauge, Counter
+import threading, time, os, requests
+from prometheus_client import Gauge, Counter, make_wsgi_app
+from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
 app = Flask(__name__)
 
@@ -32,15 +32,19 @@ with app.app_context():
 wiki_up = Gauge('wiki_service_up', 'Is wiki service running')
 article_counter = Counter('wiki_articles_total', 'Total number of created articles')
 
-def start_metrics():
-    """Отдельный поток для метрик"""
-    start_http_server(8777, addr="0.0.0.0")  # слушаем на всех интерфейсах
+# === Встраиваем метрики в Flask на /metrics ===
+metrics_app = make_wsgi_app()
+app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {
+    '/metrics': metrics_app
+})
+
+# === Поток обновления метрик ===
+def update_metrics():
     while True:
         wiki_up.set(1)
         time.sleep(5)
 
-# === Запускаем поток метрик всегда ===
-threading.Thread(target=start_metrics, daemon=True).start()
+threading.Thread(target=update_metrics, daemon=True).start()
 
 # ================== JWT проверка через auth ==================
 AUTH_URL = "http://auth:5001/api/verify"
