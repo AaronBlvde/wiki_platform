@@ -32,15 +32,15 @@ with app.app_context():
 wiki_up = Gauge('wiki_service_up', 'Is wiki service running')
 article_counter = Counter('wiki_articles_total', 'Total number of created articles')
 
-def metrics_thread():
-    start_http_server(8777, addr="0.0.0.0")  # Порт для wiki
+def start_metrics():
+    """Отдельный поток для метрик"""
+    start_http_server(8777, addr="0.0.0.0")  # слушаем на всех интерфейсах
     while True:
         wiki_up.set(1)
         time.sleep(5)
 
-# === Запуск метрик один раз (для hot reload в Flask debug) ===
-if __name__ == "__main__" and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-    threading.Thread(target=metrics_thread, daemon=True).start()
+# === Запускаем поток метрик всегда ===
+threading.Thread(target=start_metrics, daemon=True).start()
 
 # ================== JWT проверка через auth ==================
 AUTH_URL = "http://auth:5001/api/verify"
@@ -48,7 +48,6 @@ AUTH_URL = "http://auth:5001/api/verify"
 def verify_token(token):
     if not token:
         return False
-    # Убираем префикс Bearer если есть
     if token.startswith("Bearer "):
         token = token.split(" ")[1]
     try:
