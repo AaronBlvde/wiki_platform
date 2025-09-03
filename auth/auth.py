@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import jwt, time, threading
 from prometheus_client import start_http_server, Gauge, Counter
-import os
 
 app = Flask(__name__)
 SECRET = "supersecretkey"
@@ -27,14 +26,14 @@ register_counter = Counter('auth_register_total', 'Total successful registration
 login_counter = Counter('auth_login_total', 'Total successful logins')
 
 def metrics_thread():
-    start_http_server(8666, addr="0.0.0.0")  # Порт для auth
+    # Явно слушаем на всех интерфейсах внутри контейнера
+    start_http_server(8666, addr="0.0.0.0")
     while True:
         auth_up.set(1)
         time.sleep(5)
 
-# === Запуск метрик только в главном процессе Flask ===
-if __name__ == "__main__" and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-    threading.Thread(target=metrics_thread, daemon=True).start()
+# === Запускаем поток метрик всегда, независимо от debug ===
+threading.Thread(target=metrics_thread, daemon=True).start()
 
 # ================== API ==================
 @app.route("/api/register", methods=["POST"])
@@ -72,4 +71,5 @@ def home():
     return jsonify({"message": "Auth service is running"})
 
 if __name__ == "__main__":
+    # debug=True оставляем, но поток метрик уже стартует всегда
     app.run(host="0.0.0.0", port=5001, debug=True)
