@@ -7,6 +7,7 @@ services:
     ports:
       - "5001:5001"
       - "8666:8666"
+    restart: always
     networks:
       - wikinet
     volumes:
@@ -20,6 +21,7 @@ services:
     ports:
       - "5002:5002"
       - "8777:8777"
+    restart: always
     networks:
       - wikinet
     volumes:
@@ -35,6 +37,7 @@ services:
       - DOCKER=1
     ports:
       - "5003:5003"
+    restart: always
     networks:
       - wikinet
     volumes:
