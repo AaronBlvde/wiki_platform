@@ -1,0 +1,4 @@
+flask
+pyjwt
+prometheus_client
+Flask-SQLAlchemy

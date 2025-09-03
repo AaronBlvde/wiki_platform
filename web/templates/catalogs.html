@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Каталоги</h2>
+<ul class="list-group">
+    {% for c in catalogs %}
+    <li class="list-group-item">
+        <a href="/pages/{{ c.id }}">{{ c.name }}</a>
+        {% if c.hidden %}<span class="badge bg-secondary">Скрыт</span>{% endif %}
+    </li>
+    {% endfor %}
+</ul>
+{% endblock %}

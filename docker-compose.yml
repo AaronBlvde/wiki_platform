@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  auth:
+    build: ./auth
+    container_name: wiki_auth
+    ports:
+      - "5001:5001"
+    networks:
+      - wikinet
+
+  wiki:
+    build: ./wiki
+    container_name: wiki_wiki
+    depends_on:
+      - auth
+    ports:
+      - "5002:5002"
+    networks:
+      - wikinet
+
+  web:
+    build: ./web
+    container_name: wiki_web
+    depends_on:
+      - auth
+      - wiki
+    environment:
+      - DOCKER=1
+    ports:
+      - "5003:5003"
+    networks:
+      - wikinet
+
+networks:
+  wikinet:
+    driver: bridge

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Wiki Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+    <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
+</head>
+<body class="p-3">
+<div class="container">
+
+    <!-- Навигация -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1>Статьи</h1>
+        {% if session.get('token') %}
+            <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary">Выйти</a>
+        {% else %}
+            <a href="{{ url_for('login') }}" class="btn btn-outline-primary">Войти</a>
+            <a href="{{ url_for('register') }}" class="btn btn-outline-success">Регистрация</a>
+        {% endif %}
+    </div>
+
+    <!-- Поиск -->
+    <form method="POST" class="mb-3">
+        <input type="text" name="search" class="form-control" placeholder="Поиск..." value="{{ search_query }}">
+    </form>
+
+    <!-- Список статей -->
+    <ul class="list-group mb-3">
+        {% for p in pages %}
+        <li class="list-group-item">
+            <strong>{{ p.title }}</strong>
+            <div>{{ p.content|safe }}</div>
+            <a href="{{ url_for('edit_page', page_id=p.id) }}" class="btn btn-sm btn-primary">Редактировать</a>
+            <a href="{{ url_for('delete_page', page_id=p.id) }}" class="btn btn-sm btn-danger">Удалить</a>
+        </li>
+        {% endfor %}
+    </ul>
+
+    <!-- Создание статьи -->
+    <h3>Создать статью</h3>
+    <form id="create-form" method="POST" action="{{ url_for('create_page') }}">
+        <input type="text" name="title" class="form-control mb-2" placeholder="Заголовок">
+        <div id="editor" class="mb-2" style="height: 150px;"></div>
+        <input type="hidden" name="content" id="content-input">
+        <button type="submit" class="btn btn-success">Создать</button>
+    </form>
+</div>
+
+<script src="https://cdn.quilljs.com/1.3.7/quill.js"></script>
+<script>
+var quill = new Quill('#editor', { theme: 'snow' });
+document.getElementById('create-form').onsubmit = function() {
+    document.getElementById('content-input').value = quill.root.innerHTML;
+};
+</script>
+</body>
+</html>
