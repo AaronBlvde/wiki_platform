@@ -25,15 +25,15 @@ auth_up = Gauge('auth_service_up', 'Is auth service running')
 register_counter = Counter('auth_register_total', 'Total successful registrations')
 login_counter = Counter('auth_login_total', 'Total successful logins')
 
-def metrics_thread():
-    # Явно слушаем на всех интерфейсах внутри контейнера
-    start_http_server(8666, addr="0.0.0.0")
+def start_metrics():
+    """Отдельный поток для метрик"""
+    start_http_server(8666, addr="0.0.0.0")  # слушаем на всех интерфейсах
     while True:
         auth_up.set(1)
         time.sleep(5)
 
-# === Запускаем поток метрик всегда, независимо от debug ===
-threading.Thread(target=metrics_thread, daemon=True).start()
+# === Запускаем поток метрик как daemon всегда ===
+threading.Thread(target=start_metrics, daemon=True).start()
 
 # ================== API ==================
 @app.route("/api/register", methods=["POST"])
@@ -71,5 +71,5 @@ def home():
     return jsonify({"message": "Auth service is running"})
 
 if __name__ == "__main__":
-    # debug=True оставляем, но поток метрик уже стартует всегда
+    # debug=True больше не влияет на поток метрик
     app.run(host="0.0.0.0", port=5001, debug=True)
