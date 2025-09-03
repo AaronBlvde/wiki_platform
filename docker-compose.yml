@@ -6,7 +6,7 @@ services:
     container_name: wiki_auth
     ports:
       - "5001:5001"
-      - "8002:8002"
+      - "8666:8666"
     networks:
       - wikinet
     volumes:
@@ -19,7 +19,7 @@ services:
       - auth
     ports:
       - "5002:5002"
-      - "8003:8003"
+      - "8777:8777"
     networks:
       - wikinet
     volumes:

@@ -27,7 +27,7 @@ register_counter = Counter('auth_register_total', 'Total successful registration
 login_counter = Counter('auth_login_total', 'Total successful logins')
 
 def metrics_thread():
-    start_http_server(8002)  # Порт для auth
+    start_http_server(8666)  # Порт для auth
     while True:
         auth_up.set(1)
         time.sleep(5)

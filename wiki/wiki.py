@@ -33,7 +33,7 @@ wiki_up = Gauge('wiki_service_up', 'Is wiki service running')
 article_counter = Counter('wiki_articles_total', 'Total number of created articles')
 
 def metrics_thread():
-    start_http_server(8003)  # Порт для wiki
+    start_http_server(8777)  # Порт для wiki
     while True:
         wiki_up.set(1)
         time.sleep(5)
