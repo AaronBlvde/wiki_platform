@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-import threading, time, os
-import requests
+import threading, time, os, requests
 from sqlalchemy import text
 from prometheus_client import start_http_server, Gauge, Counter
 
@@ -25,13 +24,11 @@ class Page(db.Model):
     content    = db.Column(db.Text, nullable=True)
     catalog_id = db.Column(db.Integer, db.ForeignKey('catalog.id'))
     hidden     = db.Column(db.Boolean, default=False)
-    # НОВОЕ: автор статьи
-    author     = db.Column(db.String(80), nullable=True)  # оставим nullable=True для мягкой миграции
+    author     = db.Column(db.String(80), nullable=True)  # автор статьи
 
 with app.app_context():
     db.create_all()
-
-    # Мягкая миграция: добавим колонку author, если её нет (SQLite)
+    # Мягкая миграция: добавим колонку author, если её нет
     with db.engine.connect() as conn:
         cols = [row[1] for row in conn.execute(text("PRAGMA table_info(page);")).fetchall()]
         if "author" not in cols:
@@ -58,10 +55,7 @@ threading.Thread(target=start_metrics, daemon=True).start()
 AUTH_URL = "http://auth:5001/api/verify"
 
 def verify_token_and_get_login(token: str):
-    """
-    Возвращает логин (str) если токен валидный, иначе None.
-    Поддерживает заголовок Bearer и «сырой» токен.
-    """
+    """Возвращает логин если токен валидный, иначе None."""
     if not token:
         return None
     token = token.strip()
@@ -152,10 +146,6 @@ def edit_page(page_id):
 
     data = request.json or {}
     page = Page.query.get_or_404(page_id)
-
-    # при желании можно ограничить редактирование только автору:
-    # if (page.author or "unknown") != login: return jsonify({"error": "forbidden"}), 403
-
     page.title   = (data.get("title") or page.title)
     page.content = (data.get("content") or page.content)
     db.session.commit()
