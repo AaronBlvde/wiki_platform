@@ -24,7 +24,7 @@ class Page(db.Model):
     content = db.Column(db.Text, nullable=True)
     catalog_id = db.Column(db.Integer, db.ForeignKey('catalog.id'))
     hidden = db.Column(db.Boolean, default=False)
-    author = db.Column(db.String(100), nullable=False)  # логин автора
+    author = db.Column(db.String(80), nullable=False)  # имя автора
 
 with app.app_context():
     db.create_all()
@@ -34,19 +34,18 @@ wiki_up = Gauge('wiki_service_up', 'Is wiki service running')
 article_counter = Counter('wiki_articles_total', 'Total number of created articles')
 
 def start_metrics():
-    """Отдельный поток для метрик"""
-    start_http_server(8777, addr="0.0.0.0")  # слушаем на всех интерфейсах
+    start_http_server(8777, addr="0.0.0.0")
     while True:
         wiki_up.set(1)
         time.sleep(5)
 
-# === Запускаем поток метрик всегда ===
 threading.Thread(target=start_metrics, daemon=True).start()
 
 # ================== JWT проверка через auth ==================
 AUTH_URL = "http://auth:5001/api/verify"
 
 def verify_token(token):
+    """Возвращает логин пользователя или None"""
     if not token:
         return None
     if token.startswith("Bearer "):
@@ -54,11 +53,12 @@ def verify_token(token):
     try:
         resp = requests.post(AUTH_URL, json={"token": token}, timeout=3)
         if resp.status_code == 200:
-            return resp.json().get("login")  # ожидаем {"login": "username"} от auth
-        return None
+            data = resp.json()
+            # Если auth возвращает login, используем его, иначе "unknown"
+            return data.get("login", "unknown")
     except Exception as e:
         print("Auth service error:", e)
-        return None
+    return None
 
 # ================== CRUD для страниц ==================
 @app.route("/api/pages", methods=["POST"])
@@ -86,7 +86,7 @@ def create_page():
         db.session.add(page)
         db.session.commit()
         article_counter.inc()
-        return jsonify({"status": "ok", "id": page.id, "author": page.author})
+        return jsonify({"status": "ok", "id": page.id, "author": login})
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"DB commit failed: {str(e)}"}), 500
@@ -135,11 +135,12 @@ def edit_page(page_id):
     if not login:
         return jsonify({"error": "unauthorized"}), 401
 
+    data = request.json
     page = Page.query.get_or_404(page_id)
+    # Можно редактировать только если автор = login
     if page.author != login:
         return jsonify({"error": "forbidden"}), 403
 
-    data = request.json
     page.title = data.get("title", page.title)
     page.content = data.get("content", page.content)
     db.session.commit()
@@ -153,6 +154,7 @@ def delete_page(page_id):
         return jsonify({"error": "unauthorized"}), 401
 
     page = Page.query.get_or_404(page_id)
+    # Только автор может удалять
     if page.author != login:
         return jsonify({"error": "forbidden"}), 403
 
