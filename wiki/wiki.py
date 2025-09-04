@@ -2,77 +2,92 @@ from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import threading, time, os
 import requests
+from sqlalchemy import text
 from prometheus_client import start_http_server, Gauge, Counter
 
 app = Flask(__name__)
 
-# === Настройка базы данных ===
+# === DB ===
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///wiki.db")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# === Модели ===
+# === Models ===
 class Catalog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
+    id     = db.Column(db.Integer, primary_key=True)
+    name   = db.Column(db.String(100), nullable=False)
     hidden = db.Column(db.Boolean, default=False)
-    pages = db.relationship('Page', backref='catalog', cascade="all, delete-orphan")
+    pages  = db.relationship('Page', backref='catalog', cascade="all, delete-orphan")
 
 class Page(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(150), nullable=False)
-    content = db.Column(db.Text, nullable=True)
+    id         = db.Column(db.Integer, primary_key=True)
+    title      = db.Column(db.String(150), nullable=False)
+    content    = db.Column(db.Text, nullable=True)
     catalog_id = db.Column(db.Integer, db.ForeignKey('catalog.id'))
-    hidden = db.Column(db.Boolean, default=False)
-    author = db.Column(db.String(80), nullable=False)  # имя автора
+    hidden     = db.Column(db.Boolean, default=False)
+    # НОВОЕ: автор статьи
+    author     = db.Column(db.String(80), nullable=True)  # оставим nullable=True для мягкой миграции
 
 with app.app_context():
     db.create_all()
 
-# === Метрики Prometheus ===
-wiki_up = Gauge('wiki_service_up', 'Is wiki service running')
-article_counter = Counter('wiki_articles_total', 'Total number of created articles')
+    # Мягкая миграция: добавим колонку author, если её нет (SQLite)
+    with db.engine.connect() as conn:
+        cols = [row[1] for row in conn.execute(text("PRAGMA table_info(page);")).fetchall()]
+        if "author" not in cols:
+            conn.execute(text("ALTER TABLE page ADD COLUMN author VARCHAR(80)"))
+            conn.execute(text("UPDATE page SET author = 'unknown' WHERE author IS NULL"))
+
+# === Metrics ===
+wiki_up          = Gauge('wiki_service_up', 'Is wiki service running')
+article_counter  = Counter('wiki_articles_total', 'Total number of created articles')
+delete_denied_ct = Counter('wiki_delete_denied_total', 'Delete denied (not owner)')
 
 def start_metrics():
-    start_http_server(8777, addr="0.0.0.0")
+    try:
+        start_http_server(8777, addr="0.0.0.0")
+    except OSError:
+        pass
     while True:
         wiki_up.set(1)
         time.sleep(5)
 
 threading.Thread(target=start_metrics, daemon=True).start()
 
-# ================== JWT проверка через auth ==================
+# === Auth verify ===
 AUTH_URL = "http://auth:5001/api/verify"
 
-def verify_token(token):
-    """Возвращает логин пользователя или None"""
+def verify_token_and_get_login(token: str):
+    """
+    Возвращает логин (str) если токен валидный, иначе None.
+    Поддерживает заголовок Bearer и «сырой» токен.
+    """
     if not token:
         return None
-    if token.startswith("Bearer "):
-        token = token.split(" ")[1]
+    token = token.strip()
+    if token.lower().startswith("bearer "):
+        token = token.split(" ", 1)[1].strip()
     try:
         resp = requests.post(AUTH_URL, json={"token": token}, timeout=3)
         if resp.status_code == 200:
             data = resp.json()
-            # Если auth возвращает login, используем его, иначе "unknown"
-            return data.get("login", "unknown")
+            if data.get("status") == "valid":
+                return data.get("login")
+        return None
     except Exception as e:
         print("Auth service error:", e)
-    return None
+        return None
 
-# ================== CRUD для страниц ==================
+# === CRUD ===
 @app.route("/api/pages", methods=["POST"])
 def create_page():
     token = request.headers.get("Authorization")
-    login = verify_token(token)
+    login = verify_token_and_get_login(token)
     if not login:
         return jsonify({"error": "unauthorized"}), 401
 
-    data = request.json
-    if not data:
-        return jsonify({"error": "invalid json"}), 400
-
-    title = data.get("title", "Без названия")
+    data = request.json or {}
+    title = (data.get("title") or "").strip() or "Без названия"
     content = data.get("content", "")
     catalog_id = data.get("catalog_id")
 
@@ -86,7 +101,7 @@ def create_page():
         db.session.add(page)
         db.session.commit()
         article_counter.inc()
-        return jsonify({"status": "ok", "id": page.id, "author": login})
+        return jsonify({"status": "ok", "id": page.id, "author": page.author})
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"DB commit failed: {str(e)}"}), 500
@@ -94,7 +109,7 @@ def create_page():
 @app.route("/api/pages", methods=["GET"])
 def list_pages():
     token = request.headers.get("Authorization")
-    login = verify_token(token)
+    login = verify_token_and_get_login(token)
     if not login:
         return jsonify({"error": "unauthorized"}), 401
 
@@ -109,13 +124,13 @@ def list_pages():
         "content": p.content,
         "catalog_id": p.catalog_id,
         "hidden": p.hidden,
-        "author": p.author
+        "author": p.author or "unknown"
     } for p in pages])
 
 @app.route("/api/pages/<int:page_id>", methods=["GET"])
 def get_page(page_id):
     token = request.headers.get("Authorization")
-    login = verify_token(token)
+    login = verify_token_and_get_login(token)
     if not login:
         return jsonify({"error": "unauthorized"}), 401
 
@@ -125,38 +140,38 @@ def get_page(page_id):
         "title": page.title,
         "content": page.content,
         "catalog_id": page.catalog_id,
-        "author": page.author
+        "author": page.author or "unknown"
     })
 
 @app.route("/api/pages/<int:page_id>", methods=["PUT"])
 def edit_page(page_id):
     token = request.headers.get("Authorization")
-    login = verify_token(token)
+    login = verify_token_and_get_login(token)
     if not login:
         return jsonify({"error": "unauthorized"}), 401
 
-    data = request.json
+    data = request.json or {}
     page = Page.query.get_or_404(page_id)
-    # Можно редактировать только если автор = login
-    if page.author != login:
-        return jsonify({"error": "forbidden"}), 403
 
-    page.title = data.get("title", page.title)
-    page.content = data.get("content", page.content)
+    # при желании можно ограничить редактирование только автору:
+    # if (page.author or "unknown") != login: return jsonify({"error": "forbidden"}), 403
+
+    page.title   = (data.get("title") or page.title)
+    page.content = (data.get("content") or page.content)
     db.session.commit()
     return jsonify({"status": "ok"})
 
 @app.route("/api/pages/<int:page_id>", methods=["DELETE"])
 def delete_page(page_id):
     token = request.headers.get("Authorization")
-    login = verify_token(token)
+    login = verify_token_and_get_login(token)
     if not login:
         return jsonify({"error": "unauthorized"}), 401
 
     page = Page.query.get_or_404(page_id)
-    # Только автор может удалять
-    if page.author != login:
-        return jsonify({"error": "forbidden"}), 403
+    if (page.author or "unknown") != login:
+        delete_denied_ct.inc()
+        return jsonify({"error": "forbidden: not your post"}), 403
 
     db.session.delete(page)
     db.session.commit()
