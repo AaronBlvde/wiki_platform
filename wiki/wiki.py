@@ -1,17 +1,20 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-import threading, time, os, requests
+import threading, time, os, logging
+import requests
 from sqlalchemy import text
 from prometheus_client import start_http_server, Gauge, Counter
 
+# ==================== Setup ====================
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("wiki")
 
-# === DB ===
+# ==================== Database ====================
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///wiki.db")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# === Models ===
 class Catalog(db.Model):
     id     = db.Column(db.Integer, primary_key=True)
     name   = db.Column(db.String(100), nullable=False)
@@ -24,18 +27,18 @@ class Page(db.Model):
     content    = db.Column(db.Text, nullable=True)
     catalog_id = db.Column(db.Integer, db.ForeignKey('catalog.id'))
     hidden     = db.Column(db.Boolean, default=False)
-    author     = db.Column(db.String(80), nullable=True)  # автор статьи
+    author     = db.Column(db.String(80), nullable=True)
 
 with app.app_context():
     db.create_all()
-    # Мягкая миграция: добавим колонку author, если её нет
+    # Мягкая миграция для SQLite, добавляем author если нет
     with db.engine.connect() as conn:
         cols = [row[1] for row in conn.execute(text("PRAGMA table_info(page);")).fetchall()]
         if "author" not in cols:
             conn.execute(text("ALTER TABLE page ADD COLUMN author VARCHAR(80)"))
             conn.execute(text("UPDATE page SET author = 'unknown' WHERE author IS NULL"))
 
-# === Metrics ===
+# ==================== Metrics ====================
 wiki_up          = Gauge('wiki_service_up', 'Is wiki service running')
 article_counter  = Counter('wiki_articles_total', 'Total number of created articles')
 delete_denied_ct = Counter('wiki_delete_denied_total', 'Delete denied (not owner)')
@@ -43,20 +46,21 @@ delete_denied_ct = Counter('wiki_delete_denied_total', 'Delete denied (not owner
 def start_metrics():
     try:
         start_http_server(8777, addr="0.0.0.0")
-    except OSError:
-        pass
+        logger.info("Prometheus metrics started on port 8777")
+    except OSError as e:
+        logger.error(f"Prometheus server error: {e}")
     while True:
         wiki_up.set(1)
         time.sleep(5)
 
 threading.Thread(target=start_metrics, daemon=True).start()
 
-# === Auth verify ===
-AUTH_URL = "http://auth:5001/api/verify"
+# ==================== Auth ====================
+AUTH_URL = os.getenv("AUTH_URL", "http://auth:5001/api/verify")
 
 def verify_token_and_get_login(token: str):
-    """Возвращает логин если токен валидный, иначе None."""
     if not token:
+        logger.warning("Нет токена в запросе")
         return None
     token = token.strip()
     if token.lower().startswith("bearer "):
@@ -66,13 +70,16 @@ def verify_token_and_get_login(token: str):
         if resp.status_code == 200:
             data = resp.json()
             if data.get("status") == "valid":
-                return data.get("login")
+                login = data.get("login") or "unknown"
+                logger.info(f"Токен валидный, login={login}")
+                return login
+        logger.warning(f"Невалидный токен: {resp.status_code}, {resp.text}")
         return None
     except Exception as e:
-        print("Auth service error:", e)
+        logger.error(f"Ошибка при проверке токена: {e}")
         return None
 
-# === CRUD ===
+# ==================== CRUD ====================
 @app.route("/api/pages", methods=["POST"])
 def create_page():
     token = request.headers.get("Authorization")
@@ -95,9 +102,11 @@ def create_page():
         db.session.add(page)
         db.session.commit()
         article_counter.inc()
+        logger.info(f"Создан пост id={page.id}, автор={login}")
         return jsonify({"status": "ok", "id": page.id, "author": page.author})
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при создании поста: {e}")
         return jsonify({"error": f"DB commit failed: {str(e)}"}), 500
 
 @app.route("/api/pages", methods=["GET"])
@@ -146,9 +155,15 @@ def edit_page(page_id):
 
     data = request.json or {}
     page = Page.query.get_or_404(page_id)
+
+    # Можно ограничить редактирование только автором
+    if (page.author or "unknown") != login:
+        return jsonify({"error": "forbidden: not your post"}), 403
+
     page.title   = (data.get("title") or page.title)
     page.content = (data.get("content") or page.content)
     db.session.commit()
+    logger.info(f"Пост id={page.id} отредактирован автором={login}")
     return jsonify({"status": "ok"})
 
 @app.route("/api/pages/<int:page_id>", methods=["DELETE"])
@@ -161,15 +176,18 @@ def delete_page(page_id):
     page = Page.query.get_or_404(page_id)
     if (page.author or "unknown") != login:
         delete_denied_ct.inc()
+        logger.warning(f"Попытка удаления чужого поста id={page.id}, user={login}")
         return jsonify({"error": "forbidden: not your post"}), 403
 
     db.session.delete(page)
     db.session.commit()
+    logger.info(f"Пост id={page.id} удалён автором={login}")
     return jsonify({"status": "deleted"})
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "Wiki service is running"})
 
+# ==================== Run ====================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5002, debug=True)
