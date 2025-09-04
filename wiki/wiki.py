@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import threading, time, os
-import requests, jwt
-
+import requests
 from prometheus_client import start_http_server, Gauge, Counter
 
 app = Flask(__name__)
@@ -25,7 +24,6 @@ class Page(db.Model):
     content = db.Column(db.Text, nullable=True)
     catalog_id = db.Column(db.Integer, db.ForeignKey('catalog.id'))
     hidden = db.Column(db.Boolean, default=False)
-    author = db.Column(db.String(80), nullable=False)  # автор статьи
 
 with app.app_context():
     db.create_all()
@@ -46,23 +44,8 @@ threading.Thread(target=start_metrics, daemon=True).start()
 
 # ================== JWT проверка через auth ==================
 AUTH_URL = "http://auth:5001/api/verify"
-SECRET = "supersecretkey"  # должен совпадать с auth.py
-
-def decode_token(token):
-    """Возвращает имя пользователя из токена или None"""
-    if not token:
-        return None
-    if token.startswith("Bearer "):
-        token = token.split(" ")[1]
-    try:
-        payload = jwt.decode(token, SECRET, algorithms=["HS256"])
-        return payload.get("user")
-    except Exception as e:
-        print("Token decode error:", e)
-        return None
 
 def verify_token(token):
-    """Проверяет токен через auth-сервис"""
     if not token:
         return False
     if token.startswith("Bearer "):
@@ -81,10 +64,6 @@ def create_page():
     if not verify_token(token):
         return jsonify({"error": "unauthorized"}), 401
 
-    username = decode_token(token)
-    if not username:
-        return jsonify({"error": "invalid token"}), 401
-
     data = request.json
     if not data:
         return jsonify({"error": "invalid json"}), 400
@@ -99,11 +78,11 @@ def create_page():
             return jsonify({"error": f"Catalog id {catalog_id} does not exist"}), 400
 
     try:
-        page = Page(title=title, content=content, catalog_id=catalog_id, author=username)
+        page = Page(title=title, content=content, catalog_id=catalog_id)
         db.session.add(page)
         db.session.commit()
         article_counter.inc()
-        return jsonify({"status": "ok", "id": page.id, "author": page.author})
+        return jsonify({"status": "ok", "id": page.id})
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"DB commit failed: {str(e)}"}), 500
@@ -124,8 +103,7 @@ def list_pages():
         "title": p.title,
         "content": p.content,
         "catalog_id": p.catalog_id,
-        "hidden": p.hidden,
-        "author": p.author
+        "hidden": p.hidden
     } for p in pages])
 
 @app.route("/api/pages/<int:page_id>", methods=["GET"])
@@ -139,8 +117,7 @@ def get_page(page_id):
         "id": page.id,
         "title": page.title,
         "content": page.content,
-        "catalog_id": page.catalog_id,
-        "author": page.author
+        "catalog_id": page.catalog_id
     })
 
 @app.route("/api/pages/<int:page_id>", methods=["PUT"])
@@ -149,15 +126,8 @@ def edit_page(page_id):
     if not verify_token(token):
         return jsonify({"error": "unauthorized"}), 401
 
-    username = decode_token(token)
-    if not username:
-        return jsonify({"error": "invalid token"}), 401
-
-    page = Page.query.get_or_404(page_id)
-    if page.author != username:
-        return jsonify({"error": "forbidden: only author can edit"}), 403
-
     data = request.json
+    page = Page.query.get_or_404(page_id)
     page.title = data.get("title", page.title)
     page.content = data.get("content", page.content)
     db.session.commit()
@@ -169,14 +139,7 @@ def delete_page(page_id):
     if not verify_token(token):
         return jsonify({"error": "unauthorized"}), 401
 
-    username = decode_token(token)
-    if not username:
-        return jsonify({"error": "invalid token"}), 401
-
     page = Page.query.get_or_404(page_id)
-    if page.author != username:
-        return jsonify({"error": "forbidden: only author can delete"}), 403
-
     db.session.delete(page)
     db.session.commit()
     return jsonify({"status": "deleted"})
