@@ -24,6 +24,7 @@ class Page(db.Model):
     content = db.Column(db.Text, nullable=True)
     catalog_id = db.Column(db.Integer, db.ForeignKey('catalog.id'))
     hidden = db.Column(db.Boolean, default=False)
+    author = db.Column(db.String(100), nullable=False)  # логин автора
 
 with app.app_context():
     db.create_all()
@@ -47,21 +48,24 @@ AUTH_URL = "http://auth:5001/api/verify"
 
 def verify_token(token):
     if not token:
-        return False
+        return None
     if token.startswith("Bearer "):
         token = token.split(" ")[1]
     try:
         resp = requests.post(AUTH_URL, json={"token": token}, timeout=3)
-        return resp.status_code == 200
+        if resp.status_code == 200:
+            return resp.json().get("login")  # ожидаем {"login": "username"} от auth
+        return None
     except Exception as e:
         print("Auth service error:", e)
-        return False
+        return None
 
 # ================== CRUD для страниц ==================
 @app.route("/api/pages", methods=["POST"])
 def create_page():
     token = request.headers.get("Authorization")
-    if not verify_token(token):
+    login = verify_token(token)
+    if not login:
         return jsonify({"error": "unauthorized"}), 401
 
     data = request.json
@@ -78,11 +82,11 @@ def create_page():
             return jsonify({"error": f"Catalog id {catalog_id} does not exist"}), 400
 
     try:
-        page = Page(title=title, content=content, catalog_id=catalog_id)
+        page = Page(title=title, content=content, catalog_id=catalog_id, author=login)
         db.session.add(page)
         db.session.commit()
         article_counter.inc()
-        return jsonify({"status": "ok", "id": page.id})
+        return jsonify({"status": "ok", "id": page.id, "author": page.author})
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"DB commit failed: {str(e)}"}), 500
@@ -90,7 +94,8 @@ def create_page():
 @app.route("/api/pages", methods=["GET"])
 def list_pages():
     token = request.headers.get("Authorization")
-    if not verify_token(token):
+    login = verify_token(token)
+    if not login:
         return jsonify({"error": "unauthorized"}), 401
 
     catalog_id = request.args.get("catalog_id")
@@ -103,13 +108,15 @@ def list_pages():
         "title": p.title,
         "content": p.content,
         "catalog_id": p.catalog_id,
-        "hidden": p.hidden
+        "hidden": p.hidden,
+        "author": p.author
     } for p in pages])
 
 @app.route("/api/pages/<int:page_id>", methods=["GET"])
 def get_page(page_id):
     token = request.headers.get("Authorization")
-    if not verify_token(token):
+    login = verify_token(token)
+    if not login:
         return jsonify({"error": "unauthorized"}), 401
 
     page = Page.query.get_or_404(page_id)
@@ -117,17 +124,22 @@ def get_page(page_id):
         "id": page.id,
         "title": page.title,
         "content": page.content,
-        "catalog_id": page.catalog_id
+        "catalog_id": page.catalog_id,
+        "author": page.author
     })
 
 @app.route("/api/pages/<int:page_id>", methods=["PUT"])
 def edit_page(page_id):
     token = request.headers.get("Authorization")
-    if not verify_token(token):
+    login = verify_token(token)
+    if not login:
         return jsonify({"error": "unauthorized"}), 401
 
-    data = request.json
     page = Page.query.get_or_404(page_id)
+    if page.author != login:
+        return jsonify({"error": "forbidden"}), 403
+
+    data = request.json
     page.title = data.get("title", page.title)
     page.content = data.get("content", page.content)
     db.session.commit()
@@ -136,10 +148,14 @@ def edit_page(page_id):
 @app.route("/api/pages/<int:page_id>", methods=["DELETE"])
 def delete_page(page_id):
     token = request.headers.get("Authorization")
-    if not verify_token(token):
+    login = verify_token(token)
+    if not login:
         return jsonify({"error": "unauthorized"}), 401
 
     page = Page.query.get_or_404(page_id)
+    if page.author != login:
+        return jsonify({"error": "forbidden"}), 403
+
     db.session.delete(page)
     db.session.commit()
     return jsonify({"status": "deleted"})
